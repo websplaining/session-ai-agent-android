@@ -36,11 +36,21 @@ Expect the Done screen with the **bot Session ID**. Then:
    cat /root/session-claw-bridge/.env        # confirms engine + model
    ```
 
-## 5. Known limits (v0.1)
+## 5. Known limits (v0.2)
 
 - Password SSH login only (no key auth yet)
-- Install wizard only — change model / switch engine / uninstall come later
-- If the install fails, the app shows the error and the last log lines; the full log is on the server at `/var/log/saa-app-setup.log`
+- Manage actions (change model / switch engine / view ID / uninstall) are available on the **Done screen right after setup**; managing from a fresh app launch means re-entering the SSH password + API key
+- If an action fails, the app shows the error and the last log lines; the full log is on the server at `/var/log/saa-app-setup.log`
+
+## 6. Manage actions to test (v0.2)
+
+After a successful setup:
+
+- **Change model** → pick another model → Apply; the service restarts and the bot keeps the same Session ID
+- **Switch engine** → installs/configures the other engine and restarts (test both directions)
+- **View Session ID** → refreshes the ID from the server
+- **Uninstall** → confirm dialog; the service and files are removed from the server
+- **Exit** → closes the app
 
 ## Failure drill (good to test)
 

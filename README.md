@@ -29,7 +29,10 @@ Android app ──SSH (password, host-key pinning)──▶ your VPS
 3. Your Session ID (only this ID can message the bot)
 4. OpenCode Go API key ([referral link](https://opencode.ai/go?ref=9Q6GKAZPK6) — $10/month, $5 usage credit via the link)
 5. Engine: OpenClaw or Hermes
-6. Model: chosen from the models your plan actually supports (live availability probe)
+6. Model: chosen from the models your plan actually supports (live availability probe, cached for 24h with a Refresh button)
+7. Install with a live **0-100% progress bar** and detailed log
+
+After setup you can, from the app: **change model**, **switch engine**, **view the bot Session ID**, or **uninstall** — all without a terminal.
 
 ## Security
 

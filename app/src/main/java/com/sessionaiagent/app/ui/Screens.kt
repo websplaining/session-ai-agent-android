@@ -1,5 +1,6 @@
 package com.sessionaiagent.app.ui
 
+import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,9 +22,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -31,6 +32,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -42,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -285,12 +288,19 @@ private fun Engine(vm: WizardViewModel, s: UiState) {
 private fun Model(vm: WizardViewModel, s: UiState) {
     LaunchedEffect(Unit) { if (s.models.isEmpty()) vm.loadModels() }
     Column(Modifier.fillMaxSize()) {
-        Text("Models available on your plan:", color = Saa.Text, fontSize = 14.sp)
+        Text(
+            if (s.manageModels) "Change the model for your agent:" else "Models available on your plan:",
+            color = Saa.Text, fontSize = 14.sp
+        )
+        if (s.modelsFromCache) {
+            Spacer(Modifier.height(4.dp))
+            Text("cached list · tap Refresh for a live check", color = Saa.Muted, fontSize = 11.sp)
+        }
         Spacer(Modifier.height(8.dp))
         s.error.takeIf { it.isNotEmpty() }?.let {
             ErrorBox(it)
             Spacer(Modifier.height(10.dp))
-            PrimaryButton("Try again", enabled = !s.busy) { vm.loadModels() }
+            PrimaryButton("Try again", enabled = !s.busy) { vm.loadModels(force = true) }
         }
         if (s.models.isNotEmpty()) {
             LazyColumn(Modifier.weight(1f)) {
@@ -314,10 +324,19 @@ private fun Model(vm: WizardViewModel, s: UiState) {
                 }
             }
             Spacer(Modifier.height(10.dp))
-            PrimaryButton("Install now", enabled = s.model.isNotEmpty() && !s.busy) { vm.startInstall() }
+            PrimaryButton(
+                if (s.manageModels) "Apply model" else "Install now",
+                enabled = s.model.isNotEmpty() && !s.busy
+            ) {
+                if (s.manageModels) vm.applyModelChange() else vm.startInstall()
+            }
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton("Refresh list", enabled = !s.busy) { vm.loadModels(force = true) }
         }
         Spacer(Modifier.height(8.dp))
-        SecondaryButton("Back", enabled = !s.busy) { vm.go(Step.Engine) }
+        SecondaryButton("Back", enabled = !s.busy) {
+            if (s.manageModels) vm.go(Step.Done) else vm.go(Step.Engine)
+        }
     }
 }
 
@@ -327,15 +346,44 @@ private fun Install(vm: WizardViewModel, s: UiState) {
     LaunchedEffect(s.log.size) {
         if (s.log.isNotEmpty()) listState.animateScrollToItem(s.log.size - 1)
     }
+    val title = when (s.actionMode) {
+        "change-model" -> "Changing model"
+        "switch-engine" -> "Switching engine"
+        "uninstall" -> "Uninstalling"
+        else -> "Installing"
+    }
     Column(Modifier.fillMaxSize()) {
         if (s.error.isNotEmpty()) {
             ErrorBox(s.error)
             Spacer(Modifier.height(10.dp))
-            PrimaryButton("Retry") { vm.startInstall() }
-            Spacer(Modifier.height(8.dp))
-            SecondaryButton("Back") { vm.go(Step.Model) }
+            if (s.actionMode == "install") {
+                PrimaryButton("Retry") { vm.startInstall() }
+                Spacer(Modifier.height(8.dp))
+                SecondaryButton("Back") { vm.go(Step.Model) }
+            } else {
+                SecondaryButton("Back to summary") { vm.go(Step.Done) }
+            }
         } else {
-            Text("Installing on your server — keep the app open.", color = Saa.Muted, fontSize = 12.sp)
+            if (s.progress >= 0) {
+                LinearProgressIndicator(
+                    progress = { (s.progress.coerceIn(0, 100)) / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Saa.Accent,
+                    trackColor = Saa.Border
+                )
+                Spacer(Modifier.height(5.dp))
+                Text("${s.progress.coerceIn(0, 100)}%  ${s.progressLabel}", color = Saa.Accent, fontSize = 12.sp)
+            } else {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Saa.Accent,
+                    trackColor = Saa.Border
+                )
+                Spacer(Modifier.height(5.dp))
+                Text(s.progressLabel.ifEmpty { "$title…" }, color = Saa.Muted, fontSize = 12.sp)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("$title on your server — keep the app open.", color = Saa.Muted, fontSize = 12.sp)
             Spacer(Modifier.height(8.dp))
             Box(
                 Modifier.weight(1f).fillMaxWidth()
@@ -361,8 +409,45 @@ private fun Install(vm: WizardViewModel, s: UiState) {
 @Composable
 private fun Done(vm: WizardViewModel, s: UiState) {
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     var copied by remember { mutableStateOf(false) }
+    var confirmUninstall by remember { mutableStateOf(false) }
+
+    if (confirmUninstall) {
+        AlertDialog(
+            onDismissRequest = { confirmUninstall = false },
+            containerColor = Saa.Surface,
+            title = { Text("Uninstall the agent?", color = Saa.Text) },
+            text = {
+                Text(
+                    "This stops the service and removes the agent from your server. " +
+                        "Your Session account and recovery password stay with you.",
+                    color = Saa.Text, fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmUninstall = false; vm.uninstall() }) {
+                    Text("Uninstall", color = Saa.Danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUninstall = false }) { Text("Cancel", color = Saa.Muted) }
+            }
+        )
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        if (s.uninstalled) {
+            Text("Agent uninstalled", color = Saa.Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(10.dp))
+            Text("The agent was removed from your server.", color = Saa.Text, fontSize = 14.sp)
+            Spacer(Modifier.height(18.dp))
+            PrimaryButton("Set up again") { vm.go(Step.Welcome) }
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton("Exit") { (context as? Activity)?.finishAffinity() }
+            return@Column
+        }
+
         Text("Your agent is live!", color = Saa.Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
         Text("Bot Session ID:", color = Saa.Text, fontSize = 14.sp)
@@ -380,16 +465,32 @@ private fun Done(vm: WizardViewModel, s: UiState) {
             clipboard.setText(AnnotatedString(s.botId))
             copied = true
         }
+        if (s.manageResult.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(s.manageResult, color = Saa.Accent, fontSize = 12.sp)
+        }
         Spacer(Modifier.height(14.dp))
         CardBox {
             Text("Next steps", color = Saa.Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
             Bullet("Open Session and paste the bot Session ID to send a message request")
             Bullet("Only your Session ID can message the bot")
-            Bullet("Re-run the setup script on your VPS anytime to change model, switch engine, view the Session ID, or uninstall")
+            Bullet("Use the buttons below to change the model, switch engine, or uninstall")
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
+        Text("Manage this server", color = Saa.Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        PrimaryButton("Change model", enabled = !s.busy) { vm.openModelManager() }
+        Spacer(Modifier.height(8.dp))
+        SecondaryButton("Switch engine", enabled = !s.busy) { vm.switchEngine() }
+        Spacer(Modifier.height(8.dp))
+        SecondaryButton("View Session ID", enabled = !s.busy) { vm.refreshSessionId() }
+        Spacer(Modifier.height(8.dp))
+        SecondaryButton("Uninstall", enabled = !s.busy) { confirmUninstall = true }
+        Spacer(Modifier.height(16.dp))
         SecondaryButton("Set up another server") { vm.go(Step.Welcome) }
+        Spacer(Modifier.height(8.dp))
+        SecondaryButton("Exit") { (context as? Activity)?.finishAffinity() }
     }
 }
 

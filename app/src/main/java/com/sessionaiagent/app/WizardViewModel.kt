@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -33,12 +34,18 @@ data class UiState(
     val engine: String = "openclaw",
     val model: String = "",
     val models: List<String> = emptyList(),
+    val modelsFromCache: Boolean = false,
     val log: List<String> = emptyList(),
     val botId: String = "",
     val error: String = "",
     val busy: Boolean = false,
     val busyLabel: String = "",
-    val installFinished: Boolean = false,
+    val progress: Int = -1,
+    val progressLabel: String = "",
+    val actionMode: String = "install",
+    val manageModels: Boolean = false,
+    val manageResult: String = "",
+    val uninstalled: Boolean = false,
 )
 
 class WizardViewModel(app: Application) : AndroidViewModel(app) {
@@ -49,48 +56,96 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state
 
-    private fun key() = "hostkey_${_state.value.host.trim()}_${_state.value.port.trim()}"
+    private fun hostKey() = "hostkey_${_state.value.host.trim()}_${_state.value.port.trim()}"
+
+    private fun keyHash(s: String): String =
+        MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
+            .joinToString("") { "%02x".format(it) }.take(16)
+
+    private fun modelsCacheKey() =
+        "models_${_state.value.host.trim()}_${keyHash(_state.value.apiKey.trim())}"
 
     fun set(block: (UiState) -> UiState) = _state.update(block)
 
-    fun go(step: Step) = _state.update { it.copy(step = step, error = "") }
+    fun go(step: Step) = _state.update {
+        it.copy(
+            step = step, error = "",
+            manageModels = if (step == Step.Model) it.manageModels else false,
+            manageResult = if (step == Step.Done) it.manageResult else ""
+        )
+    }
 
     private fun readAsset(name: String): String =
         getApplication<Application>().assets.open(name).bufferedReader().use { it.readText() }
+
+    // ── connect ────────────────────────────────────────────────
 
     fun testConnection() {
         val s = _state.value
         viewModelScope.launch {
             _state.update { it.copy(busy = true, busyLabel = "Connecting…", error = "") }
             try {
-                val known = prefs.getString(key(), null)
+                val known = prefs.getString(hostKey(), null)
                 val fp = withContext(Dispatchers.IO) {
                     ssh.connect(s.host.trim(), s.port.trim().toInt(), s.user.trim(), s.password, known)
                 }
-                if (known == null) prefs.edit().putString(key(), fp).apply()
+                if (known == null) prefs.edit().putString(hostKey(), fp).apply()
                 _state.update {
-                    it.copy(
-                        busy = false, connected = true,
-                        fingerprint = fp, fingerprintKnown = known != null
-                    )
+                    it.copy(busy = false, connected = true, fingerprint = fp, fingerprintKnown = known != null)
                 }
+                delay(800)
+                _state.update { it.copy(step = Step.Mnemonic, error = "") }
             } catch (e: Exception) {
                 _state.update { it.copy(busy = false, connected = false, error = e.message ?: "connection failed") }
             }
         }
     }
 
-    fun loadModels() {
+    // ── models ─────────────────────────────────────────────────
+
+    private fun cachedModels(): List<String>? {
+        val raw = prefs.getString(modelsCacheKey(), null) ?: return null
+        val parts = raw.split("|", limit = 2)
+        if (parts.size != 2) return null
+        val ts = parts[0].toLongOrNull() ?: return null
+        if (System.currentTimeMillis() / 1000 - ts > 24 * 3600) return null
+        return parts[1].split(",").filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }
+    }
+
+    private fun storeModels(models: List<String>) {
+        prefs.edit().putString(modelsCacheKey(), "${System.currentTimeMillis() / 1000}|${models.joinToString(",")}").apply()
+    }
+
+    private fun pickDefault(models: List<String>, current: String): String =
+        current.takeIf { models.contains(it) }
+            ?: models.firstOrNull { it.contains("deepseek-v4-flash") }
+            ?: models.first()
+
+    fun loadModels(force: Boolean = false) {
         val s = _state.value
+        if (!force) {
+            cachedModels()?.let { cached ->
+                _state.update {
+                    it.copy(
+                        busy = false, error = "", models = cached, modelsFromCache = true,
+                        model = pickDefault(cached, it.model)
+                    )
+                }
+                return
+            }
+        }
         viewModelScope.launch {
-            _state.update { it.copy(busy = true, busyLabel = "Fetching models…", error = "", models = emptyList()) }
+            _state.update {
+                it.copy(busy = true, busyLabel = "Fetching models…", error = "", models = emptyList(), modelsFromCache = false)
+            }
             try {
                 val models = withContext(Dispatchers.IO) {
                     val env = SshManager.envString(
-                        mapOf(
-                            "SAA_ACTION" to "list-models",
-                            "OPENCODE_API_KEY" to s.apiKey.trim(),
-                        )
+                        buildMap {
+                            put("SAA_ACTION", "list-models")
+                            put("OPENCODE_API_KEY", s.apiKey.trim())
+                            if (force) put("SAA_REFRESH", "1")
+                        }
                     )
                     ssh.uploadInstaller(readAsset("saa-app-setup.sh"))
                     val out = ssh.execCapture("env $env bash /tmp/saa-app-setup.sh", 300)
@@ -103,12 +158,9 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     list
                 }
-                val preferred = models.firstOrNull { it.contains("deepseek-v4-flash") } ?: models.first()
+                storeModels(models)
                 _state.update {
-                    it.copy(
-                        busy = false, models = models,
-                        model = it.model.takeIf { m -> models.contains(m) } ?: preferred
-                    )
+                    it.copy(busy = false, models = models, modelsFromCache = false, model = pickDefault(models, it.model))
                 }
             } catch (e: Exception) {
                 _state.update { it.copy(busy = false, error = e.message ?: "failed to load models") }
@@ -116,72 +168,143 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun startInstall() {
-        val s = _state.value
+    // ── streaming runner (install + manage actions) ──────────────
+
+    private suspend fun runStreaming(action: String, extraEnv: Map<String, String>) {
+        val done = AtomicBoolean(false)
+        val botId = AtomicReference<String?>(null)
+        val failure = AtomicReference<String?>(null)
+
+        val env = SshManager.envString(buildMap {
+            put("SAA_ACTION", action)
+            putAll(extraEnv)
+        })
+
+        withContext(Dispatchers.IO) {
+            ssh.uploadInstaller(readAsset("saa-app-setup.sh"))
+            val logPath = ssh.uploadAndExecDetached(env, "/var/log/saa-app-setup.log")
+
+            val watchdog = Thread {
+                Thread.sleep(20 * 60 * 1000)
+                if (!done.get()) {
+                    failure.compareAndSet(null, "Timed out waiting for the server. Reconnect and check the logs.")
+                    done.set(true)
+                }
+            }
+            watchdog.isDaemon = true
+            watchdog.start()
+
+            ssh.streamLog(logPath, { line ->
+                when (val ev = MarkerParser.parse(line)) {
+                    is SaaEvent.BotSessionId -> {
+                        botId.set(ev.id)
+                        appendLog("Bot Session ID: ${ev.id}")
+                    }
+                    is SaaEvent.Error -> {
+                        failure.set(ev.message)
+                        appendLog("ERROR: ${ev.message}")
+                        done.set(true)
+                    }
+                    SaaEvent.Ok -> done.set(true)
+                    is SaaEvent.Step -> appendLog("► ${ev.name}")
+                    is SaaEvent.Info -> appendLog("• ${ev.key}: ${ev.value}")
+                    is SaaEvent.Progress -> _state.update { it.copy(progress = ev.percent, progressLabel = ev.label) }
+                    else -> appendLog(line)
+                }
+            }, { done.get() })
+        }
+
+        failure.get()?.let { throw IllegalStateException(it) }
+        botId.get()?.let { id -> _state.update { it.copy(botId = id) } }
+    }
+
+    private fun installEnv(): Map<String, String> = mapOf(
+        "SESSION_MNEMONIC" to _state.value.mnemonic.trim(),
+        "OWNER_SESSION_ID" to _state.value.ownerId.trim(),
+        "OPENCODE_API_KEY" to _state.value.apiKey.trim(),
+        "ENGINE" to _state.value.engine,
+        "MODEL" to _state.value.model,
+    )
+
+    private fun startAction(mode: String, extraEnv: Map<String, String>, busyLabel: String) {
         viewModelScope.launch {
             _state.update {
                 it.copy(
-                    step = Step.Install, log = emptyList(), busy = true,
-                    busyLabel = "Installing…", error = "", botId = "", installFinished = false
+                    step = Step.Install, log = emptyList(), busy = true, busyLabel = busyLabel,
+                    error = "", progress = -1, progressLabel = "",
+                    actionMode = mode, manageResult = "", uninstalled = false
                 )
             }
             try {
-                val done = AtomicBoolean(false)
-                val botId = AtomicReference<String?>(null)
-                val failure = AtomicReference<String?>(null)
-
-                withContext(Dispatchers.IO) {
-                    val env = SshManager.envString(
-                        mapOf(
-                            "SAA_ACTION" to "install",
-                            "SESSION_MNEMONIC" to s.mnemonic.trim(),
-                            "OWNER_SESSION_ID" to s.ownerId.trim(),
-                            "OPENCODE_API_KEY" to s.apiKey.trim(),
-                            "ENGINE" to s.engine,
-                            "MODEL" to s.model,
-                        )
-                    )
-                    ssh.uploadInstaller(readAsset("saa-app-setup.sh"))
-                    val logPath = ssh.uploadAndExecDetached(env, "/var/log/saa-app-setup.log")
-
-                    // watchdog: never let the stream hang forever
-                    val watchdog = Thread {
-                        Thread.sleep(20 * 60 * 1000)
-                        if (!done.get()) {
-                            failure.compareAndSet(null, "Timed out waiting for the installer. Reconnect and check the server logs.")
-                            done.set(true)
-                        }
-                    }
-                    watchdog.isDaemon = true
-                    watchdog.start()
-
-                    ssh.streamLog(logPath, { line ->
-                        val ev = MarkerParser.parse(line)
-                        when (ev) {
-                            is SaaEvent.BotSessionId -> {
-                                botId.set(ev.id)
-                                appendLog("Bot Session ID: ${ev.id}")
-                            }
-                            is SaaEvent.Error -> {
-                                failure.set(ev.message)
-                                appendLog("ERROR: ${ev.message}")
-                                done.set(true)
-                            }
-                            SaaEvent.Ok -> done.set(true)
-                            is SaaEvent.Step -> appendLog("► ${ev.name}")
-                            is SaaEvent.Info -> appendLog("• ${ev.key}: ${ev.value}")
-                            else -> appendLog(line)
-                        }
-                    }, { done.get() })
+                runStreaming(
+                    when (mode) {
+                        "change-model" -> "change-model"
+                        "switch-engine" -> "switch-engine"
+                        "uninstall" -> "uninstall"
+                        else -> "install"
+                    },
+                    extraEnv
+                )
+                when (mode) {
+                    "install" -> _state.update { it.copy(busy = false, step = Step.Done, progress = 100) }
+                    "change-model" -> _state.update { it.copy(busy = false, step = Step.Done, manageResult = "Model updated", progress = 100) }
+                    "switch-engine" -> _state.update { it.copy(busy = false, step = Step.Done, manageResult = "Engine switched", progress = 100) }
+                    "uninstall" -> _state.update { it.copy(busy = false, step = Step.Done, manageResult = "Uninstalled", uninstalled = true, progress = 100) }
                 }
-
-                val err = failure.get()
-                if (err != null) throw IllegalStateException(err)
-                val id = botId.get()
-                if (id == null) throw IllegalStateException("install finished without a bot Session ID")
-                _state.update { it.copy(busy = false, botId = id, step = Step.Done, installFinished = true) }
             } catch (e: Exception) {
-                _state.update { it.copy(busy = false, error = e.message ?: "install failed") }
+                _state.update { it.copy(busy = false, error = e.message ?: "action failed") }
+            }
+        }
+    }
+
+    fun startInstall() {
+        _state.update { it.copy(manageModels = false) }
+        startAction("install", installEnv(), "Installing…")
+    }
+
+    // ── manage actions ─────────────────────────────────────────
+
+    fun openModelManager() {
+        _state.update { it.copy(step = Step.Model, manageModels = true, error = "", manageResult = "") }
+    }
+
+    fun applyModelChange() {
+        val s = _state.value
+        startAction(
+            "change-model",
+            mapOf("MODEL" to s.model, "OPENCODE_API_KEY" to s.apiKey.trim()),
+            "Changing model…"
+        )
+    }
+
+    fun switchEngine() {
+        val s = _state.value
+        val target = if (s.engine == "openclaw") "hermes" else "openclaw"
+        startAction(
+            "switch-engine",
+            mapOf("ENGINE" to target, "MODEL" to s.model, "OPENCODE_API_KEY" to s.apiKey.trim()),
+            "Switching engine…"
+        )
+    }
+
+    fun uninstall() = startAction("uninstall", emptyMap(), "Uninstalling…")
+
+    fun refreshSessionId() {
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true, busyLabel = "Reading Session ID…", error = "", manageResult = "") }
+            try {
+                val id = withContext(Dispatchers.IO) {
+                    val env = SshManager.envString(mapOf("SAA_ACTION" to "view-id"))
+                    ssh.uploadInstaller(readAsset("saa-app-setup.sh"))
+                    val out = ssh.execCapture("env $env bash /tmp/saa-app-setup.sh", 120)
+                    out.lines().mapNotNull { (MarkerParser.parse(it) as? SaaEvent.BotSessionId)?.id }.firstOrNull()
+                }
+                _state.update {
+                    if (id != null) it.copy(busy = false, botId = id, manageResult = "Session ID refreshed")
+                    else it.copy(busy = false, error = "could not read the Session ID (is the agent running?)")
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(busy = false, error = e.message ?: "failed to read Session ID") }
             }
         }
     }
