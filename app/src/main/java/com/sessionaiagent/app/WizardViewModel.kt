@@ -208,7 +208,9 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
                     SaaEvent.Ok -> done.set(true)
                     is SaaEvent.Step -> appendLog("► ${ev.name}")
                     is SaaEvent.Info -> appendLog("• ${ev.key}: ${ev.value}")
-                    is SaaEvent.Progress -> _state.update { it.copy(progress = ev.percent, progressLabel = ev.label) }
+                    is SaaEvent.Progress -> _state.update {
+                        it.copy(progress = maxOf(it.progress, ev.percent), progressLabel = ev.label)
+                    }
                     else -> appendLog(line)
                 }
             }, { done.get() })
@@ -260,6 +262,13 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
     fun startInstall() {
         _state.update { it.copy(manageModels = false) }
         startAction("install", installEnv(), "Installing…")
+    }
+
+    /** One-tap engine fallback when an install fails (OpenClaw <-> Hermes). */
+    fun retryWithOtherEngine() {
+        val other = if (_state.value.engine == "openclaw") "hermes" else "openclaw"
+        _state.update { it.copy(engine = other) }
+        startInstall()
     }
 
     // ── manage actions ─────────────────────────────────────────

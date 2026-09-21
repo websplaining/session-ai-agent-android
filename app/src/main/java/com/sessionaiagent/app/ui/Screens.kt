@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -25,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -358,7 +360,12 @@ private fun Install(vm: WizardViewModel, s: UiState) {
             Spacer(Modifier.height(10.dp))
             if (s.actionMode == "install") {
                 PrimaryButton("Retry") { vm.startInstall() }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
+                SecondaryButton(
+                    if (s.engine == "openclaw") "Install with Hermes instead"
+                    else "Install with OpenClaw instead"
+                ) { vm.retryWithOtherEngine() }
+                Spacer(Modifier.height(6.dp))
                 SecondaryButton("Back") { vm.go(Step.Model) }
             } else {
                 SecondaryButton("Back to summary") { vm.go(Step.Done) }
@@ -372,7 +379,15 @@ private fun Install(vm: WizardViewModel, s: UiState) {
                     trackColor = Saa.Border
                 )
                 Spacer(Modifier.height(5.dp))
-                Text("${s.progress.coerceIn(0, 100)}%  ${s.progressLabel}", color = Saa.Accent, fontSize = 12.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        color = Saa.Accent,
+                        strokeWidth = 1.5.dp
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("${s.progress.coerceIn(0, 100)}%  ${s.progressLabel}", color = Saa.Accent, fontSize = 12.sp)
+                }
             } else {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth(),
@@ -436,61 +451,81 @@ private fun Done(vm: WizardViewModel, s: UiState) {
         )
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        if (s.uninstalled) {
-            Text("Agent uninstalled", color = Saa.Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(10.dp))
-            Text("The agent was removed from your server.", color = Saa.Text, fontSize = 14.sp)
-            Spacer(Modifier.height(18.dp))
-            PrimaryButton("Set up again") { vm.go(Step.Welcome) }
-            Spacer(Modifier.height(8.dp))
-            SecondaryButton("Exit") { (context as? Activity)?.finishAffinity() }
-            return@Column
-        }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val compact = maxHeight < 620.dp
 
-        Text("Your agent is live!", color = Saa.Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(10.dp))
-        Text("Bot Session ID:", color = Saa.Text, fontSize = 14.sp)
-        Spacer(Modifier.height(6.dp))
-        Box(
-            Modifier.fillMaxWidth()
-                .background(Saa.CodeBg, RoundedCornerShape(6.dp))
-                .border(1.dp, Saa.Border, RoundedCornerShape(6.dp))
-                .padding(12.dp)
-        ) {
-            Text(s.botId, color = Saa.Accent, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-        }
-        Spacer(Modifier.height(10.dp))
-        PrimaryButton(if (copied) "Copied" else "Copy bot Session ID") {
-            clipboard.setText(AnnotatedString(s.botId))
-            copied = true
-        }
-        if (s.manageResult.isNotEmpty()) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            if (s.uninstalled) {
+                Text("Agent uninstalled", color = Saa.Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Text("The agent was removed from your server.", color = Saa.Text, fontSize = 14.sp)
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PrimaryButton("Set up again", modifier = Modifier.weight(1f).height(42.dp)) { vm.go(Step.Welcome) }
+                    SecondaryButton("Exit", modifier = Modifier.weight(1f).height(42.dp)) {
+                        (context as? Activity)?.finishAffinity()
+                    }
+                }
+                return@Column
+            }
+
+            Text("Your agent is live!", color = Saa.Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text(s.manageResult, color = Saa.Accent, fontSize = 12.sp)
-        }
-        Spacer(Modifier.height(14.dp))
-        CardBox {
-            Text("Next steps", color = Saa.Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(Saa.CodeBg, RoundedCornerShape(6.dp))
+                    .border(1.dp, Saa.Border, RoundedCornerShape(6.dp))
+                    .clickable {
+                        clipboard.setText(AnnotatedString(s.botId))
+                        copied = true
+                    }
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Text(s.botId, color = Saa.Accent, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                Spacer(Modifier.height(2.dp))
+                Text(if (copied) "copied" else "tap to copy", color = Saa.Muted, fontSize = 9.sp)
+            }
+            if (s.manageResult.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(s.manageResult, color = Saa.Accent, fontSize = 11.sp)
+            }
+            if (!compact) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Open Session → paste the bot ID → only your ID can message the bot.",
+                    color = Saa.Muted, fontSize = 11.sp
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("Manage this server", color = Saa.Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
-            Bullet("Open Session and paste the bot Session ID to send a message request")
-            Bullet("Only your Session ID can message the bot")
-            Bullet("Use the buttons below to change the model, switch engine, or uninstall")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PrimaryButton("Change model", enabled = !s.busy, modifier = Modifier.weight(1f).height(42.dp)) {
+                    vm.openModelManager()
+                }
+                SecondaryButton("Switch engine", enabled = !s.busy, modifier = Modifier.weight(1f).height(42.dp)) {
+                    vm.switchEngine()
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SecondaryButton("View Session ID", enabled = !s.busy, modifier = Modifier.weight(1f).height(42.dp)) {
+                    vm.refreshSessionId()
+                }
+                SecondaryButton("Uninstall", enabled = !s.busy, modifier = Modifier.weight(1f).height(42.dp)) {
+                    confirmUninstall = true
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SecondaryButton("Set up another server", modifier = Modifier.weight(1f).height(42.dp)) {
+                    vm.go(Step.Welcome)
+                }
+                SecondaryButton("Exit", modifier = Modifier.weight(1f).height(42.dp)) {
+                    (context as? Activity)?.finishAffinity()
+                }
+            }
         }
-        Spacer(Modifier.height(16.dp))
-        Text("Manage this server", color = Saa.Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        PrimaryButton("Change model", enabled = !s.busy) { vm.openModelManager() }
-        Spacer(Modifier.height(8.dp))
-        SecondaryButton("Switch engine", enabled = !s.busy) { vm.switchEngine() }
-        Spacer(Modifier.height(8.dp))
-        SecondaryButton("View Session ID", enabled = !s.busy) { vm.refreshSessionId() }
-        Spacer(Modifier.height(8.dp))
-        SecondaryButton("Uninstall", enabled = !s.busy) { confirmUninstall = true }
-        Spacer(Modifier.height(16.dp))
-        SecondaryButton("Set up another server") { vm.go(Step.Welcome) }
-        Spacer(Modifier.height(8.dp))
-        SecondaryButton("Exit") { (context as? Activity)?.finishAffinity() }
     }
 }
 
@@ -529,7 +564,12 @@ private fun Field(
 }
 
 @Composable
-private fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun PrimaryButton(
+    text: String,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier.fillMaxWidth().height(46.dp),
+    onClick: () -> Unit
+) {
     Button(
         onClick = onClick,
         enabled = enabled,
@@ -540,14 +580,19 @@ private fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> 
             disabledContentColor = Saa.Muted
         ),
         shape = RoundedCornerShape(6.dp),
-        modifier = Modifier.fillMaxWidth().height(46.dp)
+        modifier = modifier
     ) {
         Text(text, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     }
 }
 
 @Composable
-private fun SecondaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun SecondaryButton(
+    text: String,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier.fillMaxWidth().height(44.dp),
+    onClick: () -> Unit
+) {
     Button(
         onClick = onClick,
         enabled = enabled,
@@ -558,7 +603,7 @@ private fun SecondaryButton(text: String, enabled: Boolean = true, onClick: () -
             disabledContentColor = Saa.Muted
         ),
         shape = RoundedCornerShape(6.dp),
-        modifier = Modifier.fillMaxWidth().height(44.dp)
+        modifier = modifier
     ) {
         Text(text, fontSize = 13.sp)
     }

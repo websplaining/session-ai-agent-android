@@ -187,17 +187,12 @@ probe_models() {
 
 step_prereqs() {
   say "prereqs"
-  progress 5 "Installing prerequisites"
+  progress 3 "Updating packages"
   apt_wait
   apt-get update -qq
   apt-get install -y -qq unzip curl gnupg >/dev/null 2>&1 || true
-  if ! command -v node >/dev/null 2>&1 || [[ $(node -v 2>/dev/null | grep -oE '^v[0-9]+' | tr -d v) -lt 22 ]]; then
-    hr "installing Node.js 22"
-    apt_wait
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
-    apt-get install -y -qq nodejs >/dev/null 2>&1
-  fi
   if ! command -v bun >/dev/null 2>&1; then
+    progress 8 "Installing runtime tools"
     hr "installing Bun"
     export BUN_INSTALL=/root/.bun
     curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1
@@ -209,19 +204,59 @@ step_prereqs() {
 # OpenClaw
 # ─────────────────────────────────────────────────────────────
 
+# OpenClaw 2026.9.5+ requires Node >=24.16.0 <25 or >=26.1.0
+node_ok_for_openclaw() {
+  local v major minor
+  v=$(node -v 2>/dev/null | sed 's/^v//') || return 1
+  IFS=. read -r major minor _ <<<"$v"
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+  if (( major == 24 && minor >= 16 )); then return 0; fi
+  if (( major == 26 && minor >= 1 )) || (( major > 26 )); then return 0; fi
+  return 1
+}
+
+ensure_node_for_openclaw() {
+  if node_ok_for_openclaw && command -v npm >/dev/null 2>&1; then return 0; fi
+  hr "installing Node.js 24 (required by OpenClaw)"
+  apt_wait
+  curl -fsSL https://deb.nodesource.com/setup_24.x | bash - >/dev/null 2>&1
+  apt-get install -y -qq nodejs >/dev/null 2>&1
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    die "Node.js 24 install failed (npm is required for OpenClaw)"
+  fi
+}
+
 install_openclaw() {
+  ensure_node_for_openclaw
   if which openclaw >/dev/null 2>&1; then return 0; fi
   ensure_swap
-  rm -rf /usr/lib/node_modules/openclaw /usr/lib/node_modules/.openclaw-* >/dev/null 2>&1
+  local GROOT
+  GROOT=$(npm root -g 2>/dev/null || echo /usr/lib/node_modules)
+  rm -rf "$GROOT"/openclaw "$GROOT"/.openclaw-* >/dev/null 2>&1
   local attempt
-  for attempt in 1 2; do
+  for attempt in 1 2 3; do
     hr "installing OpenClaw (attempt $attempt)"
-    npm install -g openclaw@latest --no-audit --no-fund --maxsockets=4 --prefer-offline >/dev/null 2>&1 || true
+    if (( attempt == 3 )); then
+      hr "clearing npm cache for openclaw"
+      npm cache clean --force >/dev/null 2>&1 || true
+    fi
+    npm install -g openclaw@latest --no-audit --no-fund --maxsockets=4 >/dev/null 2>&1 || true
     if which openclaw >/dev/null 2>&1; then return 0; fi
-    rm -rf /usr/lib/node_modules/openclaw /usr/lib/node_modules/.openclaw-* >/dev/null 2>&1
+    rm -rf "$GROOT"/openclaw "$GROOT"/.openclaw-* >/dev/null 2>&1
   done
-  tail -5 "$(ls -t ~/.npm/_logs/*.log 2>/dev/null | head -1)" 2>/dev/null
-  die "OpenClaw install failed (low memory or network)"
+  hr "OpenClaw install failed - diagnostics:"
+  echo "  node: $(node -v 2>/dev/null || echo MISSING)   npm: $(npm -v 2>/dev/null || echo MISSING)"
+  echo "  requires: Node >=24.16.0 <25 or >=26.1.0"
+  echo "  registry: $(npm config get registry 2>/dev/null)"
+  echo "  memory: $(free -m | awk 'NR==2{print $2" MB total, "$7" MB available"}')"
+  echo "  disk: $(df -h / | awk 'NR==2{print $5" used"}')"
+  local newest
+  newest=$(ls -t ~/.npm/_logs/*.log 2>/dev/null | head -1)
+  if [[ -n "$newest" ]]; then
+    hr "last npm log lines ($newest):"
+    tail -15 "$newest" 2>/dev/null
+  fi
+  die "OpenClaw install failed - see diagnostics above"
 }
 
 init_openclaw() {
@@ -354,7 +389,7 @@ install_hermes() {
 
 step_bridge() {
   say "bridge"
-  progress 82 "Downloading bridge"
+  progress 20 "Downloading bridge"
   cd /root || die "cd /root failed"
   hr "downloading bridge"
   curl -sL "$BRIDGE_URL" | tar xz || die "bridge download failed"
@@ -366,7 +401,7 @@ step_bridge() {
 
 step_env() {
   say "env"
-  progress 86 "Writing configuration"
+  progress 25 "Writing configuration"
   cat > "$DIR/.env" <<EOF
 SESSION_MNEMONIC="$MNEMONIC"
 OWNER_SESSION_ID=$OWNER
@@ -380,7 +415,7 @@ EOF
 
 step_service() {
   say "service"
-  progress 92 "Starting service"
+  progress 88 "Starting service"
   cp "$DIR/claw-bridge.service" /etc/systemd/system/
   systemctl daemon-reload
   systemctl enable --now claw-bridge >/dev/null 2>&1
@@ -391,7 +426,7 @@ step_service() {
 step_bot_id() {
   say "bot-id"
   local f=/tmp/session-ai-agent/session-id.txt id="" i
-  progress 96 "Waiting for the bot Session ID"
+  progress 93 "Waiting for the bot Session ID"
   for i in $(seq 1 30); do
     [[ -f "$f" ]] && id=$(cat "$f") && [[ -n "$id" ]] && break
     sleep 3
@@ -413,18 +448,18 @@ do_install() {
   step_env
   say "engine"
   if [[ "$ENGINE" == "hermes" ]]; then
-    progress 12 "Installing Hermes Agent"
+    progress 30 "Installing Hermes Agent"
     install_hermes
-    progress 60 "Configuring Hermes"
+    progress 65 "Configuring Hermes"
     configure_hermes
-    progress 72 "Testing reply"
+    progress 78 "Testing reply"
     smoke_test_hermes || true
   else
-    progress 12 "Installing OpenClaw"
+    progress 30 "Installing OpenClaw"
     install_openclaw
-    progress 60 "Configuring OpenClaw"
+    progress 65 "Configuring OpenClaw"
     init_openclaw
-    progress 76 "Warm-up complete"
+    progress 78 "Warm-up complete"
   fi
   step_service
   step_bot_id
@@ -475,14 +510,14 @@ do_switch_engine() {
   if [[ "$ENGINE" == "hermes" ]]; then
     progress 15 "Installing Hermes Agent"
     install_hermes
-    progress 60 "Configuring Hermes"
+    progress 65 "Configuring Hermes"
     configure_hermes
-    progress 72 "Testing reply"
+    progress 78 "Testing reply"
     smoke_test_hermes || true
   else
     progress 15 "Installing OpenClaw"
     install_openclaw
-    progress 60 "Configuring OpenClaw"
+    progress 65 "Configuring OpenClaw"
     init_openclaw
   fi
   sed -i "s|^BACKEND=.*|BACKEND=$ENGINE|" "$DIR/.env"
