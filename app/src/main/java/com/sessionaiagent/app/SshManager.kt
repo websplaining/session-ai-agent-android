@@ -1,7 +1,9 @@
 package com.sessionaiagent.app
 
 import android.util.Base64
+import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
+import net.schmizz.sshj.common.SecurityUtils
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import net.schmizz.sshj.xfer.InMemorySourceFile
 import java.io.ByteArrayInputStream
@@ -23,7 +25,12 @@ class SshManager {
     fun connect(host: String, port: Int, user: String, password: String, expectedFingerprint: String?): String {
         disconnect()
         val captured = arrayOf("")
-        val client = SSHClient()
+        // Drop curve25519 KEX: it needs BouncyCastle X25519, which Android's platform BC lacks.
+        // ecdh-sha2-nistp256 covers virtually every sshd.
+        val config = DefaultConfig()
+        config.keyExchangeFactories =
+            config.keyExchangeFactories.filterNot { it.name.contains("curve25519", ignoreCase = true) }
+        val client = SSHClient(config)
         client.addHostKeyVerifier(object : HostKeyVerifier {
             override fun verify(hostname: String, p: Int, key: PublicKey): Boolean {
                 val digest = MessageDigest.getInstance("SHA-256").digest(key.encoded)
@@ -139,6 +146,14 @@ class SshManager {
     }
 
     companion object {
+        init {
+            // Android ships a stripped-down provider registered as "BC", and SSHJ would route
+            // all crypto through it -> "no such algorithm: x25519 for provider bc".
+            // Force SSHJ to use the platform's default JCE providers instead.
+            SecurityUtils.setRegisterBouncyCastle(false)
+            SecurityUtils.setSecurityProvider(null)
+        }
+
         /** POSIX single-quote escaping for env values. */
         fun shQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 

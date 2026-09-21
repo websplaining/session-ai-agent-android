@@ -2,6 +2,10 @@
 
 Android companion app that sets up **Session AI Agent** on your own VPS over SSH — enter your server details, and the app installs and configures everything, then shows you the bot's Session ID. No terminal needed.
 
+[![Download latest APK](https://img.shields.io/badge/%E2%AC%87%20Download%20APK-latest-00FFA3?style=for-the-badge&logo=android&logoColor=000000)](https://github.com/websplaining/session-ai-agent-android/releases/latest)
+
+<sub>Android 8+ · allow install from unknown sources · see <a href="docs/TESTING.md">docs/TESTING.md</a> for the test walkthrough</sub>
+
 > **Status:** in development. The website installer at [sessionaiagent.com](https://sessionaiagent.com) is unchanged and remains the primary path; this app is a separate, self-contained client that performs the same setup on your server.
 
 ## How it works

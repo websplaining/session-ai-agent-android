@@ -168,7 +168,7 @@ private fun Connect(vm: WizardViewModel, s: UiState) {
         }
         Spacer(Modifier.height(14.dp))
         if (!s.connected) {
-            PrimaryButton("Test connection", enabled = !s.busy) {
+            PrimaryButton("Connect", enabled = !s.busy) {
                 if (validateConnect(s)) vm.testConnection()
             }
         } else {
