@@ -25,7 +25,7 @@ export PATH="/root/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 API="https://opencode.ai/zen/go/v1/models"
 BRIDGE_URL="https://sessionaiagent.com/session-claw-bridge-v2.tar.gz"
 DIR="/root/session-claw-bridge"
-DEFAULT_MODEL="opencode-go/deepseek-v4-flash"
+DEFAULT_MODEL="opencode-go/deepseek-v4.1-flash"
 MODELS_CACHE="/root/.saa-models-cache.json"
 
 ACTION="${SAA_ACTION:-install}"
@@ -391,11 +391,23 @@ step_bridge() {
   say "bridge"
   progress 20 "Downloading bridge"
   cd /root || die "cd /root failed"
-  hr "downloading bridge"
-  curl -sL "$BRIDGE_URL" | tar xz || die "bridge download failed"
+  local archive=/tmp/saa-bridge.tar.gz attempt ok=""
+  for attempt in 1 2 3; do
+    hr "downloading bridge (attempt $attempt)"
+    if curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 -o "$archive" "$BRIDGE_URL" \
+       && tar tzf "$archive" >/dev/null 2>&1; then
+      if tar xzf "$archive" -C /root; then ok=1; break; fi
+    fi
+    hr "bridge download attempt $attempt failed (truncated or network error)"
+    rm -f "$archive"
+    sleep 2
+  done
+  rm -f "$archive"
+  [[ -n "$ok" ]] || die "bridge download failed after 3 attempts - check network access to sessionaiagent.com"
   [[ -f "$DIR/index.js" ]] || die "bridge files missing after download"
+  progress 22 "Installing bridge dependencies"
   if command -v bun >/dev/null 2>&1; then
-    (cd "$DIR" && bun install --quiet) >/dev/null 2>&1 || true
+    (cd "$DIR" && timeout 300 bun install --quiet) >/dev/null 2>&1 || true
   fi
 }
 

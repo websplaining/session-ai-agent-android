@@ -118,6 +118,7 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun pickDefault(models: List<String>, current: String): String =
         current.takeIf { models.contains(it) }
+            ?: models.firstOrNull { it.contains("deepseek-v4.1-flash") }
             ?: models.firstOrNull { it.contains("deepseek-v4-flash") }
             ?: models.first()
 

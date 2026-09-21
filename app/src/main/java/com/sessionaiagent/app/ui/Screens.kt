@@ -136,7 +136,7 @@ private fun Welcome(vm: WizardViewModel) {
         }
         Spacer(Modifier.height(14.dp))
         Text(
-            "Your SSH password is never stored and never leaves your phone except to your own server.",
+            "Your root password is never stored and never leaves your phone except to your own server.",
             color = Saa.Muted, fontSize = 12.sp
         )
         Spacer(Modifier.height(18.dp))
@@ -156,7 +156,7 @@ private fun Connect(vm: WizardViewModel, s: UiState) {
                 Field("Username", s.user, { v -> vm.set { it.copy(user = v) } })
             }
         }
-        Field("SSH password", s.password, { v -> vm.set { it.copy(password = v, connected = false) } }, isPassword = true)
+        Field("Root password", s.password, { v -> vm.set { it.copy(password = v, connected = false) } }, isPassword = true)
         s.error.takeIf { it.isNotEmpty() }?.let { ErrorBox(it) }
         if (s.connected) {
             CardBox {

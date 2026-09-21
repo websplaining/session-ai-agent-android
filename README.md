@@ -40,7 +40,7 @@ Android app ──SSH (password, host-key pinning)──▶ your VPS
 
 ## What the wizard asks for
 
-1. VPS host / IP, SSH port (default 22), user (default root), password
+1. VPS host / IP, SSH port (default 22), user (default root), root password
 2. Your 13-word Session recovery password (for the bot account)
 3. Your Session ID (only this ID can message the bot)
 4. OpenCode Go API key ([referral link](https://opencode.ai/go?ref=9Q6GKAZPK6) — $10/month, $5 usage credit via the link)
@@ -56,12 +56,13 @@ After setup you can, from the app: **change model**, **switch engine**, **view t
 |---|---|---|
 | <img src="kamatera.png" width="22"> | [**Kamatera VPS**](https://kamatera.sjv.io/c/1245219/3024352/36439) | recommended VPS — $4/month, free 30-day trial ($100 credits) |
 | <img src="opencode-logo.png" width="22"> | [**OpenCode Go**](https://opencode.ai/go?ref=9Q6GKAZPK6) | required AI subscription — $10/month, $5 usage credit via the link |
-| <img src="youtube-logo.png" width="22"> | [**Websplaining on YouTube**](https://www.youtube.com/@Websplaining) | setup guides & demos |
+| <img src="youtube-logo.png" width="22"> | [**How To Run Session AI Agent**](https://www.youtube.com/watch?v=b5cZj3l43N4) | full video walkthrough |
+| <img src="websplaining-logo.png" width="22"> | [**Websplaining**](https://www.youtube.com/@Websplaining) | subscribe for setup guides & demos |
 | <img src="session-logo-mirrored.png" width="22"> | [**Session AI Agent**](https://sessionaiagent.com) | main project — website installer, docs, live node dashboard |
 
 ## Security
 
-- SSH password is **never stored** and never leaves your device except to your own server
+- Root password is **never stored** and never leaves your device except to your own server
 - Host key is pinned on first connection (TOFU) and verified afterwards
 - Secrets are never written to logs
 - The app has no analytics, no ads, no tracking, and no self-update mechanism
