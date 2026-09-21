@@ -1,0 +1,15 @@
+Session AI Agent sets up a private AI agent on Session Messenger, running on your own VPS.
+
+This app walks you through it step by step: enter your server's IP and SSH password, your Session details, and an OpenCode Go API key. The app connects directly to your server, installs the agent (OpenClaw or Hermes engine), and shows you the bot's Session ID to paste into the Session app. No terminal or command line needed.
+
+Features:
+- Step-by-step wizard with live progress
+- Supports OpenClaw and Hermes Agent engines
+- Model picker showing only the models your OpenCode Go plan supports
+- Direct phone-to-server SSH connection - nothing routed through third parties
+- No tracking, no ads, no analytics
+
+Requirements:
+- A VPS (Ubuntu 24.04+ recommended, 1 GB RAM)
+- A Session account for the bot (its 13-word recovery password)
+- An OpenCode Go subscription (https://opencode.ai/go)

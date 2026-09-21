@@ -1,0 +1,24 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Signing (never commit)
+*.jks
+*.keystore
+keystore.properties
+
+# generated: bundled installer copy (source of truth: scripts/saa-app-setup.sh)
+app/src/main/assets/saa-app-setup.sh
