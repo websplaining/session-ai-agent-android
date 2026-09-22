@@ -642,6 +642,11 @@ do_status() {
   local state="unknown" m="" e=""
   state=$(systemctl is-active claw-bridge 2>/dev/null || true)
   [[ -f "$DIR/.env" ]] && { m=$(grep -oP '^MODEL=\K.*' "$DIR/.env" || true); e=$(grep -oP '^BACKEND=\K.*' "$DIR/.env" || true); }
+  if [[ -f "$DIR/.env" ]]; then
+    info "installed yes"
+  else
+    info "installed no"
+  fi
   info "service ${state:-unknown}"
   info "engine ${e:-none}"
   info "model ${m:-none}"

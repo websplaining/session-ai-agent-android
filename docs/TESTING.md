@@ -44,9 +44,11 @@ Expect the Done screen with the **bot Session ID**. Then:
 
 ## 6. Manage actions to test (v0.2)
 
+**Existing-agent detection (v0.2.4):** connect to a server that already runs the agent → the app should skip the wizard and land on **"Manage your agent"** with the status line (running · engine · model) and the bot Session ID. Test: View Session ID, Change model (prompts for the API key first if needed), Switch engine, Uninstall.
+
 After a successful setup:
 
-- **Change model** → pick another model → Apply; the service restarts and the bot keeps the same Session ID
+- **Change model** → pick another model → Apply; the service restarts and the bot keeps the same Session ID (if the new model fails, the app reverts to the previous one)
 - **Switch engine** → installs/configures the other engine and restarts (test both directions)
 - **View Session ID** → refreshes the ID from the server
 - **Uninstall** → confirm dialog; the service and files are removed from the server

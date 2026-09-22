@@ -5,7 +5,6 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -16,7 +15,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 enum class Step {
-    Welcome, Connect, Mnemonic, OwnerId, ApiKey, Engine, Model, Install, Done
+    Welcome, Connect, Mnemonic, OwnerId, ApiKey, Engine, Model, Install, Done, Manage
 }
 
 data class UiState(
@@ -46,6 +45,9 @@ data class UiState(
     val manageModels: Boolean = false,
     val manageResult: String = "",
     val uninstalled: Boolean = false,
+    val serviceState: String = "",
+    val manageOnly: Boolean = false,
+    val pendingManageAction: String? = null,
 )
 
 class WizardViewModel(app: Application) : AndroidViewModel(app) {
@@ -112,11 +114,64 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update {
                     it.copy(busy = false, connected = true, fingerprint = fp, fingerprintKnown = known != null)
                 }
-                delay(800)
-                _state.update { it.copy(step = Step.Mnemonic, error = "") }
+                detectExisting()
             } catch (e: Exception) {
                 _state.update { it.copy(busy = false, connected = false, error = e.message ?: "connection failed") }
             }
+        }
+    }
+
+    private data class ExistingInfo(
+        val installed: Boolean = false,
+        val engine: String = "",
+        val model: String = "",
+        val service: String = "",
+        val botId: String? = null,
+    )
+
+    /** After connecting, check whether this server already runs a Session AI Agent. */
+    private suspend fun detectExisting() {
+        _state.update { it.copy(busy = true, busyLabel = "Checking for an existing agent…", error = "") }
+        val found = try {
+            withContext(Dispatchers.IO) {
+                ensureConnected()
+                ssh.uploadInstaller(readAsset("saa-app-setup.sh"))
+                val env = SshManager.envString(mapOf("SAA_ACTION" to "status"))
+                val out = ssh.execCapture("env $env bash /tmp/saa-app-setup.sh", 120)
+                var info = ExistingInfo()
+                out.lines().forEach { line ->
+                    when (val ev = MarkerParser.parse(line)) {
+                        is SaaEvent.Info -> when (ev.key) {
+                            "installed" -> info = info.copy(installed = ev.value == "yes")
+                            "engine" -> info = info.copy(engine = ev.value)
+                            "model" -> info = info.copy(model = ev.value)
+                            "service" -> info = info.copy(service = ev.value)
+                        }
+                        is SaaEvent.BotSessionId -> info = info.copy(botId = ev.id)
+                        else -> {}
+                    }
+                }
+                info
+            }
+        } catch (e: Exception) {
+            appendLog("• could not check for an existing agent (${e.message})")
+            ExistingInfo()
+        }
+
+        if (found.installed) {
+            appendLog("• existing agent detected (${found.engine}, ${found.model})")
+            _state.update {
+                it.copy(
+                    busy = false, manageOnly = true, step = Step.Manage, error = "",
+                    engine = found.engine.ifEmpty { "openclaw" },
+                    model = found.model,
+                    serviceState = found.service,
+                    botId = found.botId ?: it.botId,
+                    manageResult = "",
+                )
+            }
+        } else {
+            _state.update { it.copy(busy = false, manageOnly = false, step = Step.Mnemonic, error = "") }
         }
     }
 
@@ -271,9 +326,15 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 when (mode) {
                     "install" -> _state.update { it.copy(busy = false, step = Step.Done, progress = 100) }
-                    "change-model" -> _state.update { it.copy(busy = false, step = Step.Done, manageResult = "Model updated", progress = 100) }
-                    "switch-engine" -> _state.update { it.copy(busy = false, step = Step.Done, manageResult = "Engine switched", progress = 100) }
-                    "uninstall" -> _state.update { it.copy(busy = false, step = Step.Done, manageResult = "Uninstalled", uninstalled = true, progress = 100) }
+                    "change-model" -> _state.update {
+                        it.copy(busy = false, step = if (it.manageOnly) Step.Manage else Step.Done, manageResult = "Model updated", progress = 100)
+                    }
+                    "switch-engine" -> _state.update {
+                        it.copy(busy = false, step = if (it.manageOnly) Step.Manage else Step.Done, manageResult = "Engine switched", progress = 100)
+                    }
+                    "uninstall" -> _state.update {
+                        it.copy(busy = false, step = Step.Done, manageResult = "Uninstalled", uninstalled = true, progress = 100)
+                    }
                 }
             } catch (e: Exception) {
                 _state.update { it.copy(busy = false, error = e.message ?: "action failed") }
@@ -296,6 +357,10 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
     // ── manage actions ─────────────────────────────────────────
 
     fun openModelManager() {
+        if (_state.value.apiKey.isBlank()) {
+            _state.update { it.copy(pendingManageAction = "change-model", step = Step.ApiKey, error = "") }
+            return
+        }
         _state.update { it.copy(step = Step.Model, manageModels = true, error = "", manageResult = "") }
     }
 
@@ -310,12 +375,31 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
 
     fun switchEngine() {
         val s = _state.value
+        if (s.apiKey.isBlank()) {
+            _state.update { it.copy(pendingManageAction = "switch-engine", step = Step.ApiKey, error = "") }
+            return
+        }
         val target = if (s.engine == "openclaw") "hermes" else "openclaw"
         startAction(
             "switch-engine",
             mapOf("ENGINE" to target, "MODEL" to s.model, "OPENCODE_API_KEY" to s.apiKey.trim()),
             "Switching engine…"
         )
+    }
+
+    /** Called when the API key step completes: resumes a pending manage action or continues setup. */
+    fun apiKeyDone() {
+        when (_state.value.pendingManageAction) {
+            "change-model" -> {
+                _state.update { it.copy(pendingManageAction = null) }
+                openModelManager()
+            }
+            "switch-engine" -> {
+                _state.update { it.copy(pendingManageAction = null) }
+                switchEngine()
+            }
+            else -> go(Step.Engine)
+        }
     }
 
     fun uninstall() = startAction("uninstall", emptyMap(), "Uninstalling…")

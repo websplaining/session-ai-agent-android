@@ -93,6 +93,7 @@ fun AppScreen(vm: WizardViewModel) {
                     Step.Model -> Model(vm, s)
                     Step.Install -> Install(vm, s)
                     Step.Done -> Done(vm, s)
+                    Step.Manage -> Manage(vm, s)
                 }
             }
             if (s.busy) {
@@ -121,6 +122,7 @@ private fun stepTitle(step: Step): String = when (step) {
     Step.Model -> "step 6 of 7 · model"
     Step.Install -> "step 7 of 7 · installing"
     Step.Done -> "done"
+    Step.Manage -> "existing agent · manage"
 }
 
 // ───────────────────────── screens ─────────────────────────
@@ -245,9 +247,13 @@ private fun OwnerId(vm: WizardViewModel, s: UiState) {
 private fun ApiKey(vm: WizardViewModel, s: UiState) {
     val uri = LocalUriHandler.current
     var localError by remember { mutableStateOf("") }
+    val managing = s.pendingManageAction != null
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Text(
-            "Session AI Agent runs on an OpenCode Go subscription ($10/month). Subscribing through this link gives you $5 in usage credit:",
+            if (managing)
+                "Enter your OpenCode Go API key — it's needed to update the agent on this server:"
+            else
+                "Session AI Agent runs on an OpenCode Go subscription ($10/month). Subscribing through this link gives you $5 in usage credit:",
             color = Saa.Text, fontSize = 14.sp
         )
         Spacer(Modifier.height(6.dp))
@@ -263,10 +269,10 @@ private fun ApiKey(vm: WizardViewModel, s: UiState) {
         PrimaryButton("Continue") {
             val e = Validators.apiKeyError(s.apiKey)
             localError = e ?: ""
-            if (e == null) vm.go(Step.Engine)
+            if (e == null) vm.apiKeyDone()
         }
         Spacer(Modifier.height(8.dp))
-        SecondaryButton("Back") { vm.go(Step.OwnerId) }
+        SecondaryButton("Back") { if (managing) vm.go(Step.Manage) else vm.go(Step.OwnerId) }
     }
 }
 
@@ -434,9 +440,7 @@ private fun Install(vm: WizardViewModel, s: UiState) {
 
 @Composable
 private fun Done(vm: WizardViewModel, s: UiState) {
-    val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
-    var copied by remember { mutableStateOf(false) }
     var confirmUninstall by remember { mutableStateOf(false) }
 
     if (confirmUninstall) {
@@ -483,51 +487,7 @@ private fun Done(vm: WizardViewModel, s: UiState) {
             Text("Your agent is live!", color = Saa.Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
 
-            // copy feedback: glow + green hue that fades back
-            val glowAlpha by animateFloatAsState(if (copied) 0.95f else 0f, tween(300), label = "glowAlpha")
-            val glowRadius by animateFloatAsState(if (copied) 12f else 0f, tween(300), label = "glowRadius")
-            val boxBorder by animateColorAsState(if (copied) Saa.Accent else Saa.Border, tween(300), label = "boxBorder")
-            val boxBg by animateColorAsState(
-                if (copied) Saa.Accent.copy(alpha = 0.12f) else Saa.CodeBg,
-                tween(300), label = "boxBg"
-            )
-            LaunchedEffect(copied) {
-                if (copied) {
-                    delay(1800)
-                    copied = false
-                }
-            }
-
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(boxBg, RoundedCornerShape(6.dp))
-                    .border(1.dp, boxBorder, RoundedCornerShape(6.dp))
-                    .clickable {
-                        clipboard.setText(AnnotatedString(s.botId))
-                        copied = true
-                    }
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    s.botId,
-                    color = Saa.Accent,
-                    style = TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        shadow = Shadow(
-                            color = Saa.Accent.copy(alpha = glowAlpha),
-                            offset = Offset.Zero,
-                            blurRadius = glowRadius
-                        )
-                    ),
-                    fontSize = 9.sp
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    if (copied) "copied ✓" else "tap to copy",
-                    color = if (copied) Saa.Accent else Saa.Muted,
-                    fontSize = 9.sp
-                )
-            }
+            CopyableIdBox(s.botId)
             if (s.manageResult.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
                 Text(s.manageResult, color = Saa.Accent, fontSize = 11.sp)
@@ -569,6 +529,138 @@ private fun Done(vm: WizardViewModel, s: UiState) {
                 }
             }
         }
+    }
+}
+
+// ───────────────────────── manage (existing install) ─────────────────────────
+
+@Composable
+private fun Manage(vm: WizardViewModel, s: UiState) {
+    val context = LocalContext.current
+    var confirmUninstall by remember { mutableStateOf(false) }
+
+    if (confirmUninstall) {
+        AlertDialog(
+            onDismissRequest = { confirmUninstall = false },
+            containerColor = Saa.Surface,
+            title = { Text("Uninstall the agent?", color = Saa.Text) },
+            text = {
+                Text(
+                    "This stops the service and removes the agent from your server. " +
+                        "Your Session account and recovery password stay with you.",
+                    color = Saa.Text, fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmUninstall = false; vm.uninstall() }) {
+                    Text("Uninstall", color = Saa.Danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUninstall = false }) { Text("Cancel", color = Saa.Muted) }
+            }
+        )
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Text("Manage your agent", color = Saa.Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        val status = when (s.serviceState) {
+            "active" -> "● running"
+            "" -> "● unknown"
+            else -> "● ${s.serviceState}"
+        }
+        Text(
+            "Detected on this server · $status · ${s.engine} · ${s.model.removePrefix("opencode-go/")}",
+            color = Saa.Muted, fontSize = 11.sp
+        )
+        Spacer(Modifier.height(10.dp))
+
+        if (s.botId.isNotEmpty()) {
+            CopyableIdBox(s.botId)
+        } else {
+            Text(
+                "Session ID unavailable right now — the agent writes it on startup. Tap View Session ID to retry.",
+                color = Saa.Muted, fontSize = 11.sp
+            )
+        }
+        if (s.manageResult.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(s.manageResult, color = Saa.Accent, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PrimaryButton("Change model", enabled = !s.busy, modifier = Modifier.weight(1f).height(42.dp)) {
+                vm.openModelManager()
+            }
+            SecondaryButton("Switch engine", enabled = !s.busy, modifier = Modifier.weight(1f).height(42.dp)) {
+                vm.switchEngine()
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SecondaryButton("View Session ID", enabled = !s.busy, modifier = Modifier.weight(1f).height(42.dp)) {
+                vm.refreshSessionId()
+            }
+            SecondaryButton("Uninstall", enabled = !s.busy, modifier = Modifier.weight(1f).height(42.dp)) {
+                confirmUninstall = true
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        SecondaryButton("Exit", modifier = Modifier.height(42.dp)) {
+            (context as? Activity)?.finishAffinity()
+        }
+    }
+}
+
+@Composable
+private fun CopyableIdBox(id: String) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
+    val glowAlpha by animateFloatAsState(if (copied) 0.95f else 0f, tween(300), label = "glowAlpha")
+    val glowRadius by animateFloatAsState(if (copied) 12f else 0f, tween(300), label = "glowRadius")
+    val boxBorder by animateColorAsState(if (copied) Saa.Accent else Saa.Border, tween(300), label = "boxBorder")
+    val boxBg by animateColorAsState(
+        if (copied) Saa.Accent.copy(alpha = 0.12f) else Saa.CodeBg,
+        tween(300), label = "boxBg"
+    )
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1800)
+            copied = false
+        }
+    }
+
+    Column(
+        Modifier.fillMaxWidth()
+            .background(boxBg, RoundedCornerShape(6.dp))
+            .border(1.dp, boxBorder, RoundedCornerShape(6.dp))
+            .clickable {
+                clipboard.setText(AnnotatedString(id))
+                copied = true
+            }
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+    ) {
+        Text(
+            id,
+            color = Saa.Accent,
+            style = TextStyle(
+                fontFamily = FontFamily.Monospace,
+                shadow = Shadow(
+                    color = Saa.Accent.copy(alpha = glowAlpha),
+                    offset = Offset.Zero,
+                    blurRadius = glowRadius
+                )
+            ),
+            fontSize = 9.sp
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            if (copied) "copied ✓" else "tap to copy",
+            color = if (copied) Saa.Accent else Saa.Muted,
+            fontSize = 9.sp
+        )
     }
 }
 
