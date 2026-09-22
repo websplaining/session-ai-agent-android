@@ -78,6 +78,25 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
     private fun readAsset(name: String): String =
         getApplication<Application>().assets.open(name).bufferedReader().use { it.readText() }
 
+    /** Reconnects using the details held in this session when the SSH client has dropped. */
+    private suspend fun ensureConnected() {
+        if (ssh.isAlive()) return
+        val s = _state.value
+        _state.update { it.copy(busyLabel = "Reconnecting…") }
+        val known = prefs.getString(hostKey(), null)
+        try {
+            withContext(Dispatchers.IO) {
+                ssh.connect(s.host.trim(), s.port.trim().toInt(), s.user.trim(), s.password, known)
+            }
+            appendLog("• reconnected to ${s.host.trim()}")
+        } catch (e: Exception) {
+            throw IllegalStateException(
+                "Connection to your server was lost and could not be restored (${e.message ?: "unknown error"}). " +
+                    "Check the server, then tap Retry."
+            )
+        }
+    }
+
     // ── connect ────────────────────────────────────────────────
 
     fun testConnection() {
@@ -148,6 +167,7 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
                             if (force) put("SAA_REFRESH", "1")
                         }
                     )
+                    ensureConnected()
                     ssh.uploadInstaller(readAsset("saa-app-setup.sh"))
                     val out = ssh.execCapture("env $env bash /tmp/saa-app-setup.sh", 300)
                     val list = out.lines().mapNotNull { line ->
@@ -182,6 +202,7 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
         })
 
         withContext(Dispatchers.IO) {
+            ensureConnected()
             ssh.uploadInstaller(readAsset("saa-app-setup.sh"))
             val logPath = ssh.uploadAndExecDetached(env, "/var/log/saa-app-setup.log")
 
@@ -304,6 +325,7 @@ class WizardViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(busy = true, busyLabel = "Reading Session ID…", error = "", manageResult = "") }
             try {
                 val id = withContext(Dispatchers.IO) {
+                    ensureConnected()
                     val env = SshManager.envString(mapOf("SAA_ACTION" to "view-id"))
                     ssh.uploadInstaller(readAsset("saa-app-setup.sh"))
                     val out = ssh.execCapture("env $env bash /tmp/saa-app-setup.sh", 120)

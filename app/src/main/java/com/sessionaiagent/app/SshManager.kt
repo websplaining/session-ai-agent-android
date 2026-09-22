@@ -60,7 +60,18 @@ class SshManager {
             }
         }
         ssh = client
+        // Keep the session alive during long wizard steps / installs
+        try { client.connection.keepAlive.keepAliveInterval = 25 } catch (_: Exception) {}
         return captured[0]
+    }
+
+    fun isAlive(): Boolean {
+        val c = ssh ?: return false
+        return try {
+            c.isConnected && c.isAuthenticated
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun friendlyError(e: Exception): String {
@@ -79,7 +90,7 @@ class SshManager {
 
     /** Uploads the installer script to /tmp and marks it executable. */
     fun uploadInstaller(script: String) {
-        val client = ssh ?: throw IllegalStateException("not connected")
+        val client = ssh ?: throw IllegalStateException("SSH connection lost - go back to the Connect step and reconnect")
         val bytes = script.toByteArray(Charsets.UTF_8)
         client.newSFTPClient().use { sftp ->
             sftp.put(object : InMemorySourceFile() {
@@ -93,7 +104,7 @@ class SshManager {
 
     /** Runs a command, returns captured stdout. */
     fun execCapture(command: String, timeoutSec: Long = 300): String {
-        val client = ssh ?: throw IllegalStateException("not connected")
+        val client = ssh ?: throw IllegalStateException("SSH connection lost - go back to the Connect step and reconnect")
         val session = client.startSession()
         try {
             val cmd = session.exec(command)
@@ -117,7 +128,7 @@ class SshManager {
 
     /** Streams a remote log file; stops when [stop] returns true. */
     fun streamLog(logPath: String, onLine: (String) -> Unit, stop: () -> Boolean) {
-        val client = ssh ?: throw IllegalStateException("not connected")
+        val client = ssh ?: throw IllegalStateException("SSH connection lost - go back to the Connect step and reconnect")
         val session = client.startSession()
         try {
             val cmd = session.exec("tail -n +1 -f $logPath")

@@ -1,6 +1,9 @@
 package com.sessionaiagent.app.ui
 
 import android.app.Activity
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -44,11 +47,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -59,6 +65,7 @@ import com.sessionaiagent.app.Step
 import com.sessionaiagent.app.UiState
 import com.sessionaiagent.app.Validators
 import com.sessionaiagent.app.WizardViewModel
+import kotlinx.coroutines.delay
 
 @Composable
 fun AppScreen(vm: WizardViewModel) {
@@ -368,6 +375,10 @@ private fun Install(vm: WizardViewModel, s: UiState) {
                 Spacer(Modifier.height(6.dp))
                 SecondaryButton("Back") { vm.go(Step.Model) }
             } else {
+                if (s.actionMode == "change-model") {
+                    PrimaryButton("Pick another model", enabled = !s.busy) { vm.openModelManager() }
+                    Spacer(Modifier.height(6.dp))
+                }
                 SecondaryButton("Back to summary") { vm.go(Step.Done) }
             }
         } else {
@@ -471,19 +482,51 @@ private fun Done(vm: WizardViewModel, s: UiState) {
 
             Text("Your agent is live!", color = Saa.Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
+
+            // copy feedback: glow + green hue that fades back
+            val glowAlpha by animateFloatAsState(if (copied) 0.95f else 0f, tween(300), label = "glowAlpha")
+            val glowRadius by animateFloatAsState(if (copied) 12f else 0f, tween(300), label = "glowRadius")
+            val boxBorder by animateColorAsState(if (copied) Saa.Accent else Saa.Border, tween(300), label = "boxBorder")
+            val boxBg by animateColorAsState(
+                if (copied) Saa.Accent.copy(alpha = 0.12f) else Saa.CodeBg,
+                tween(300), label = "boxBg"
+            )
+            LaunchedEffect(copied) {
+                if (copied) {
+                    delay(1800)
+                    copied = false
+                }
+            }
+
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Saa.CodeBg, RoundedCornerShape(6.dp))
-                    .border(1.dp, Saa.Border, RoundedCornerShape(6.dp))
+                    .background(boxBg, RoundedCornerShape(6.dp))
+                    .border(1.dp, boxBorder, RoundedCornerShape(6.dp))
                     .clickable {
                         clipboard.setText(AnnotatedString(s.botId))
                         copied = true
                     }
                     .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
-                Text(s.botId, color = Saa.Accent, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                Text(
+                    s.botId,
+                    color = Saa.Accent,
+                    style = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        shadow = Shadow(
+                            color = Saa.Accent.copy(alpha = glowAlpha),
+                            offset = Offset.Zero,
+                            blurRadius = glowRadius
+                        )
+                    ),
+                    fontSize = 9.sp
+                )
                 Spacer(Modifier.height(2.dp))
-                Text(if (copied) "copied" else "tap to copy", color = Saa.Muted, fontSize = 9.sp)
+                Text(
+                    if (copied) "copied ✓" else "tap to copy",
+                    color = if (copied) Saa.Accent else Saa.Muted,
+                    fontSize = 9.sp
+                )
             }
             if (s.manageResult.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))

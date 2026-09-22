@@ -101,7 +101,7 @@ ensure_swap() {
   fi
 }
 
-key_hash() { printf '%s' "$1" | sha256sum | cut -c1-16; }
+key_hash() { printf 'v2-%s' "$(printf '%s' "$1" | sha256sum | cut -c1-16)"; }
 
 # cache format: one line per key: "<hash> <epoch> <model1> <model2> ..."
 cache_get() {
@@ -168,10 +168,19 @@ probe_models() {
   for f in "$tmpd"/*; do
     raw=$(cat "$f"); code=${raw##*|}; b=${raw%|*}; m=${b%%|*}; b=${b#*|}
     [[ -z "$m" ]] && continue
-    if [[ "$code" == "401" ]] && grep -qiE 'not supported|not available' <<<"$b"; then
-      continue
+    if [[ "$code" == 2* ]]; then
+      keep+=("$m")
+    elif [[ "$code" == 4* ]]; then
+      # permanently unusable for this account (plan limit, privacy/data-training, invalid)
+      local reason
+      reason=$(grep -oE '"message":"[^"]{0,90}' <<<"$b" | head -1 | sed 's/"message":"//')
+      [[ -z "$reason" ]] && reason="unavailable (HTTP $code)"
+      echo "SAA:INFO hidden $m: $reason"
+    else
+      # transient (429/5xx/timeout) - keep, it may work later
+      keep+=("$m")
+      echo "SAA:INFO warned $m: no clean response (HTTP $code, kept)"
     fi
-    keep+=("$m")
   done
   rm -rf "$tmpd"
   (( ${#keep[@]} )) || die "no models available for this key"
@@ -259,7 +268,7 @@ install_openclaw() {
   die "OpenClaw install failed - see diagnostics above"
 }
 
-init_openclaw() {
+configure_openclaw() {
   local bare="${MODEL#opencode-go/}"
   local tmp entries sid
   hr "configuring OpenClaw"
@@ -296,9 +305,35 @@ print(json.dumps(arr))' "$bare" "$(openclaw config get models.providers.opencode
   if ! openclaw config get models.providers.opencode-go.headers --json 2>/dev/null | grep -q 'x-opencode-session'; then
     warn "could not register the OpenCode session header"
   fi
+}
+
+# Returns 0 when the configured model produces a real reply.
+warmup_openclaw() {
   hr "warming up OpenClaw"
-  timeout 180 openclaw agent --local --session-id warmup --model "$MODEL" \
-    --message "Reply with exactly: OK" --json >/dev/null 2>&1 || warn "warm-up returned no output"
+  local out code
+  out=$(timeout 180 openclaw agent --local --session-id warmup --model "$MODEL" \
+    --message "Reply with exactly: OK" --json 2>&1)
+  code=$?
+  if (( code != 0 )); then
+    hr "warm-up failed (exit $code)"
+    echo "$out" | head -3
+    return 1
+  fi
+  if [[ -z "$out" ]]; then
+    hr "warm-up returned no output"
+    return 1
+  fi
+  if grep -qiE '"isError"\s*:\s*true|"type"\s*:\s*"error"|upstream request failed|not supported' <<<"$out"; then
+    hr "warm-up reported an error:"
+    echo "$out" | head -3
+    return 1
+  fi
+  return 0
+}
+
+init_openclaw() {
+  configure_openclaw
+  warmup_openclaw || warn "warm-up returned no output"
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -491,24 +526,74 @@ do_change_model() {
   require_installed
   [[ -n "$KEY" ]] || die "missing OPENCODE_API_KEY"
   norm_model
+  local prev backend okw=1
+  prev=$(grep -oP '^MODEL=\K.*' "$DIR/.env" 2>/dev/null || echo "")
+  backend=$(grep -oP '^BACKEND=\K.*' "$DIR/.env" 2>/dev/null || echo openclaw)
   progress 10 "Updating model"
   sed -i "s|^MODEL=.*|MODEL=$MODEL|" "$DIR/.env"
-  local backend
-  backend=$(grep -oP '^BACKEND=\K.*' "$DIR/.env" 2>/dev/null || echo openclaw)
   if [[ "$backend" == "hermes" ]]; then
     progress 50 "Reconfiguring Hermes"
     configure_hermes
     progress 75 "Testing reply"
-    smoke_test_hermes || true
+    smoke_test_hermes || okw=0
   else
     progress 50 "Registering model in OpenClaw"
-    init_openclaw
+    configure_openclaw
+    progress 75 "Testing reply"
+    warmup_openclaw || okw=0
   fi
+  if (( okw == 0 )) && [[ -n "$prev" && "$prev" != "$MODEL" ]]; then
+    progress 85 "Model failed - reverting to $prev"
+    sed -i "s|^MODEL=.*|MODEL=$prev|" "$DIR/.env"
+    if [[ "$backend" == "hermes" ]]; then
+      configure_hermes
+    else
+      configure_openclaw
+      warmup_openclaw >/dev/null 2>&1 || true
+    fi
+    systemctl restart claw-bridge
+    die "Model $MODEL did not respond (unavailable or not agent-compatible). Reverted to $prev."
+  fi
+  (( okw == 0 )) && die "Model $MODEL did not respond (unavailable or not agent-compatible)."
   progress 92 "Restarting service"
   systemctl restart claw-bridge
   info "engine $backend"
   info "model $MODEL"
   progress 100 "Model updated"
+  ok
+}
+
+do_switch_engine() {
+  require_installed
+  validate_engine_switch
+  local cur okw=1
+  cur=$(grep -oP '^BACKEND=\K.*' "$DIR/.env" 2>/dev/null || echo openclaw)
+  [[ "$ENGINE" != "$cur" ]] || die "already running $ENGINE"
+  progress 8 "Switching to $ENGINE"
+  if [[ "$ENGINE" == "hermes" ]]; then
+    progress 15 "Installing Hermes Agent"
+    install_hermes
+    progress 60 "Configuring Hermes"
+    configure_hermes
+    progress 72 "Testing reply"
+    smoke_test_hermes || okw=0
+  else
+    progress 15 "Installing OpenClaw"
+    install_openclaw
+    progress 60 "Configuring OpenClaw"
+    configure_openclaw
+    progress 72 "Testing reply"
+    warmup_openclaw || okw=0
+  fi
+  if (( okw == 0 )); then
+    die "Engine $ENGINE did not respond - still running $cur. Try again or pick another model."
+  fi
+  sed -i "s|^BACKEND=.*|BACKEND=$ENGINE|" "$DIR/.env"
+  progress 92 "Restarting service"
+  systemctl restart claw-bridge
+  info "engine $ENGINE"
+  info "model $MODEL"
+  progress 100 "Engine switched"
   ok
 }
 
